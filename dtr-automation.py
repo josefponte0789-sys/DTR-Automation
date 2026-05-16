@@ -6,310 +6,219 @@ import keyboard
 import threading
 from tkinter import *
 
+# ── Config ────────────────────────────────────────────────────────────────────
 
-
-df = pd.read_excel('joborderpersonnels.xlsx')
-running = True
-
+EXCEL_FILE = 'joborderpersonnels.xlsx'
+PERSONNEL_TYPES = {
+    'jo':    'JobOrderName',
+    'nurse': 'NurseName',
+}
 
 pyautogui.FAILSAFE = True
 
-#########################################
+# ── State ─────────────────────────────────────────────────────────────────────
 
-##TESTING CHANGING OF DATES##
-# print_ic = pyautogui.locateCenterOnScreen('printicon.PNG', confidence=0.8)
-# print(print_ic)
-# if print_ic is not None:
-#     pyautogui.moveTo(print_ic)
-#     pyautogui.click()
-# else:
-#     print('Skipping personnel...')
+df = pd.read_excel(EXCEL_FILE)
+running = False
 
-# time.sleep(1)
-# print_ic = pyautogui.locateCenterOnScreen('view-print.PNG', confidence=0.8)
-# print(print_ic)
-# pyautogui.moveTo(print_ic)
-# pyautogui.click()
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-########################################
+def pick_date():
+    return pyautogui.prompt(text='Pick a Date (YYYY-MM-DD)', title='Date Picker', default='')
 
 
-def start_automation():
-    global running
-    sys_message = pyautogui.confirm(text='Use the automator?', title='Confirmation', buttons=['OK', 'Cancel'])
+def find_and_click(image, confidence=0.8, retries=1):
+    """Locate an image on screen and click it. Returns the center point or None."""
+    for _ in range(retries):
+        loc = pyautogui.locateCenterOnScreen(image, confidence=confidence)
+        if loc:
+            pyautogui.moveTo(loc)
+            pyautogui.click()
+            return loc
+    return None
 
-    if sys_message == 'Cancel':
-        exit()
-        
 
+def navigate_to_search():
+    """Navigate to the time attendance search page and return when the search bar is ready."""
+    find_and_click('work-timeattendance.PNG', confidence=0.7)
+    time.sleep(2.5)
+
+    find_and_click('schoolname.PNG', confidence=0.8)
+    time.sleep(1.5)
+
+    pyautogui.write('10000')
+    time.sleep(2.5)
+    pyautogui.press('Enter')
+    time.sleep(10.5)
+
+    find_and_click('searchbar.PNG', confidence=0.8)
     time.sleep(1)
+
+
+def clear_search():
+    """Clear the search bar and return focus to it."""
+    find_and_click('searchbar.PNG', confidence=0.8)
+    pyautogui.hotkey('ctrl', 'a')
+    time.sleep(0.5)
+    pyautogui.press('backspace')
+    time.sleep(0.5)
+
+
+def process_one(name, date_picker):
+    """
+    Run the full print-and-download flow for a single personnel name.
+    Returns True on success, False if the personnel should be skipped.
+    """
+    pyautogui.write(name)
+    pyautogui.press('Enter')
+
+    # Click the print icon — skip if not found
+    if not find_and_click('printicon.PNG', confidence=0.8):
+        print(f'  No print icon found — skipping {name}')
+        return False
+
+    time.sleep(0.5)
+
+    # Click the grid-print button with a small offset
+    grid_loc = pyautogui.locateCenterOnScreen('grid-print.PNG', confidence=0.8)
+    if grid_loc is None:
+        return False
+    time.sleep(0.7)
+    pyautogui.click(grid_loc.x - 60, grid_loc.y - 10)
+    time.sleep(0.4)
+
+    # Enter the chosen date
+    pyautogui.hotkey('ctrl', 'a')
+    time.sleep(0.08)
+    pyautogui.press('backspace')
+    time.sleep(0.08)
+    pyautogui.write(date_picker)
+    time.sleep(1.5)
+
+    # View / print
+    find_and_click('view-print.PNG', confidence=0.9)
+    time.sleep(3.5)
+
+    # Download
+    find_and_click('downloadpdf.PNG', confidence=0.8)
+    time.sleep(1.5)
+    pyautogui.press('enter')
+    time.sleep(0.5)
+    pyautogui.hotkey('ctrl', 'w')
+    time.sleep(0.5)
+
+    # Close the timesheet panel
+    find_and_click('close-printtimesheet.PNG', confidence=0.8)
+    time.sleep(1)
+
+    return True
+
+
+# ── Core automation ───────────────────────────────────────────────────────────
+
+def run_automation():
+    """Main automation loop — handles navigation, personnel iteration, and restarts."""
+    global running
+
+    personnel_type = pyautogui.prompt(
+        text='Type "jo" for Job Order Personnel, "nurse" for Nurse personnel.',
+        title='What are we saving?',
+        default=''
+    )
+    if not personnel_type or personnel_type not in PERSONNEL_TYPES:
+        set_status('Invalid personnel type. Stopping.')
+        running = False
+        return
+
+    date_picker = pick_date()
+    if not date_picker:
+        set_status('No date selected. Stopping.')
+        running = False
+        return
+
+    col = PERSONNEL_TYPES[personnel_type]
+
     while running:
         try:
-            result_label.config(text=f"")
+            navigate_to_search()
 
-            x,y = pyautogui.locateCenterOnScreen('work-timeattendance.PNG',confidence=0.8)
-            print(x,y)
-            pyautogui.moveTo(x,y)
-            pyautogui.click()
+            start_from = pyautogui.prompt(
+                text='Start saving from which personnel?',
+                title='Start saving from?',
+                default=''
+            )
+            start_idx = df.index[df[col] == start_from][0]
+            subset = df.iloc[start_idx:]
 
+            for name in subset[col]:
+                if not running or keyboard.is_pressed('q'):
+                    sys.exit()
 
-            time.sleep(1.8)
+                time.sleep(0.75)
 
-            x,y = pyautogui.locateCenterOnScreen('schoolname.PNG',confidence=0.8)
-            print(x,y)
-            pyautogui.moveTo(x,y)
-            pyautogui.click()
+                if pd.isna(name):
+                    set_status('Finished.')
+                    running = False
+                    break
 
+                print(f'Processing: {name}')
+                set_status(f'Saving: {name}')
 
-            time.sleep(0.5)
+                process_one(name, date_picker)
+                clear_search()
 
+            break  # Clean exit after finishing the list
 
-            pyautogui.write('10000')
-
-            time.sleep(1.5)
-
-            schoolid_name = pyautogui.locateCenterOnScreen('schoolid.PNG', confidence=0.8)
-            print(schoolid_name)
-            pyautogui.moveTo(schoolid_name)
-            pyautogui.click()
-
-
-            time.sleep(7.5)
-
-            search_loc = pyautogui.locateCenterOnScreen('searchbar.PNG', confidence=0.8)
-            print(search_loc)
-            pyautogui.moveTo(search_loc)
-            pyautogui.click()
-
-
-            time.sleep(1)
-            date_picker = pyautogui.prompt(text='Pick a Date(YYYY-MM-DD)', title='Date Picker', default='')
-
-            selection_list = pyautogui.prompt(text='Type "jo" for Job Order Personnel, "nurse" for Nurse personnel.',title='What are we saving?',default='')
-            start_from = pyautogui.prompt(text='Start saving from which personnel?', title='Start saving from?', default='')
-            start_indexjo = df.index[df['JobOrderName'] == start_from][0]
-            subset = df.iloc[start_indexjo:]
-
-
-
-            if(selection_list == 'jo'):
-                for personnel_names in subset['JobOrderName']:
-                    if not running:
-                        break
-                    
-                    if keyboard.is_pressed('q'):
-                        sys.exit()
-                    
-                    time.sleep(0.75)
-                    
-                    if pd.isna(personnel_names):
-                        time.sleep(1.5)
-                        result_label.config(text=f"Finished.")
-                        break
-                    
-                    main_label.config(text=f'Click the "quit" button to exit the program!')
-                    
-                    
-                    print(f'Processing: {personnel_names}')
-                    result_label.config(text=f"Saving: {personnel_names}", font=('Comfortaa', 12, 'bold'))
-                    root.update()
-                    pyautogui.write(personnel_names)
-                    pyautogui.press('Enter')
-
-                    print_ic = pyautogui.locateCenterOnScreen('printicon.PNG', confidence=0.8)
-                    print(print_ic)
-                    if print_ic is not None:
-                        pyautogui.moveTo(print_ic)
-                        pyautogui.click()
-                    else:
-                        print('Skipping personnel...')
-                        continue
-
-                    time.sleep(0.5)
-                    
-                    print_ic = pyautogui.locateCenterOnScreen('grid-print.PNG', confidence=0.8)
-                    print(print_ic)
-                    pyautogui.moveTo(print_ic)
-                    pyautogui.click(x=1120,y=260)
-
-                    time.sleep(0.4)
-
-                    pyautogui.hotkey('ctrl','a')
-
-                    time.sleep(0.08)
-                    pyautogui.press('backspace')
-                    time.sleep(0.08)
-                    pyautogui.write(date_picker)
-
-                    time.sleep(1.5)
-                    
-                    print_ic = pyautogui.locateCenterOnScreen('view-print.PNG', confidence=0.8)
-                    print(print_ic)
-                    pyautogui.moveTo(print_ic)
-                    pyautogui.click()
-
-
-                    time.sleep(3.5)
-
-                    download_df = pyautogui.locateCenterOnScreen('downloadpdf.PNG', confidence=0.8)
-                    print(download_df)
-                    time.sleep(0.75)
-                    pyautogui.moveTo(download_df)
-                    pyautogui.click()
-                    time.sleep(1.5)
-                    pyautogui.press('enter')
-                    time.sleep(0.5)
-                    pyautogui.hotkey('ctrl','w')
-
-
-                    time.sleep(0.5)
-
-                    close_timesheet = pyautogui.locateCenterOnScreen('close-printtimesheet.PNG', confidence=0.8)
-                    print(close_timesheet)
-                    pyautogui.moveTo(close_timesheet)
-                    pyautogui.click()
-                    
-                    time.sleep(1)
-                    search_loc = pyautogui.locateCenterOnScreen('searchbar.PNG', confidence=0.8)
-                    print(search_loc)
-                    pyautogui.moveTo(search_loc)
-                    pyautogui.click()
-                    pyautogui.hotkey('ctrl','a')
-                    time.sleep(0.5)
-                    pyautogui.press('backspace')
-                    time.sleep(0.5)
-
-
-            elif(selection_list == 'nurse'):
-                    for personnel_names in df['NurseName']:
-                        if keyboard.is_pressed('q'):
-                            sys.exit()
-                        
-                        time.sleep(0.75)
-                        
-                        if pd.isna(personnel_names):
-                            time.sleep(1.5)
-                            result_label.config(text=f"Finished.")
-                            break
-                        
-                        main_label.config(text=f'Click the "quit" button to exit the program!')
-                        
-                        print(f'Processing: {personnel_names}')
-                        result_label.config(text=f"Saving: {personnel_names}", font=('Comfortaa', 12, 'bold'))
-                        root.update()
-                        pyautogui.write(personnel_names)
-                        pyautogui.press('Enter')
-
-                        print_ic = pyautogui.locateCenterOnScreen('printicon.PNG', confidence=0.8)
-                        print(print_ic)
-                        if print_ic is not None:
-                            pyautogui.moveTo(print_ic)
-                            pyautogui.click()
-                        else:
-                            print('Skipping personnel...')
-                            continue
-
-                        time.sleep(0.5)
-                        
-                        print_ic = pyautogui.locateCenterOnScreen('grid-print.PNG', confidence=0.8)
-                        print(print_ic)
-                        pyautogui.moveTo(print_ic)
-                        pyautogui.click(x=1120,y=260)
-
-                        time.sleep(0.4)
-
-                        pyautogui.hotkey('ctrl','a')
-
-                        time.sleep(0.08)
-                        pyautogui.press('backspace')
-                        time.sleep(0.08)
-                        pyautogui.write(date_picker)
-
-                        time.sleep(1.5)
-                        
-                        print_ic = pyautogui.locateCenterOnScreen('view-print.PNG', confidence=0.8)
-                        print(print_ic)
-                        pyautogui.moveTo(print_ic)
-                        pyautogui.click()
-
-
-                        time.sleep(3.5)
-
-                        download_df = pyautogui.locateCenterOnScreen('downloadpdf.PNG', confidence=0.8)
-                        print(download_df)
-                        time.sleep(0.75)
-                        pyautogui.moveTo(download_df)
-                        pyautogui.click()
-                        time.sleep(1.5)
-                        pyautogui.press('enter')
-                        time.sleep(0.5)
-                        pyautogui.hotkey('ctrl','w')
-
-
-                        time.sleep(0.5)
-
-                        close_timesheet = pyautogui.locateCenterOnScreen('close-printtimesheet.PNG', confidence=0.8)
-                        print(close_timesheet)
-                        pyautogui.moveTo(close_timesheet)
-                        pyautogui.click()
-                        
-                        time.sleep(1)
-                        search_loc = pyautogui.locateCenterOnScreen('searchbar.PNG', confidence=0.8)
-                        print(search_loc)
-                        pyautogui.moveTo(search_loc)
-                        pyautogui.click()
-                        pyautogui.hotkey('ctrl','a')
-                        time.sleep(0.5)
-                        pyautogui.press('backspace')
-                        time.sleep(0.5)
-                        
-            if selection_list == 'Cancel':
-                exit()
         except pyautogui.ImageNotFoundException:
-            result_label.config(text=f'Image Error has occured! Restarting...')
+            set_status(f'Image not found — restarting from last checkpoint...')
             time.sleep(3)
-            
-        except Exception:
-            result_label.config(text=f'An error has occured. Breaking...')
+            # Loop continues: will re-navigate and prompt for start_from again
+
+        except Exception as e:
+            print(f'Unexpected error: {e}')
+            set_status('An error occurred. Stopping.')
             time.sleep(3)
             running = False
 
 
-            
+# ── GUI helpers ───────────────────────────────────────────────────────────────
+
+def set_status(text):
+    result_label.config(text=text, font=('Comfortaa', 12, 'bold'))
+    root.update()
+
+
 def start_script():
     global running
+    if running:
+        return
+    confirmed = pyautogui.confirm(text='Start the automator?', title='Confirmation', buttons=['OK', 'Cancel'])
+    if confirmed == 'Cancel':
+        return
     running = True
-    threading.Thread(target = start_automation, daemon=True).start()
+    threading.Thread(target=run_automation, daemon=True).start()
 
 
 def stop_script():
     global running
     running = False
-    print("Stopped!")
-    
-    
+    set_status('Stopped.')
+    print('Stopped.')
+
+
+# ── GUI layout ────────────────────────────────────────────────────────────────
+
 root = Tk()
 root.geometry('250x280')
-
 root.attributes('-topmost', True)
 
+Label(root, text='Time Attendance Automator', font=('Comfortaa', 10, 'bold')).pack(pady=10)
 
-main_label = Label(root, text='')
-main_label.pack(pady=10)
+Button(root, text='Start Automation', command=start_script).pack(pady=5)
+Button(root, text='Stop Automation',  command=stop_script).pack(pady=5)
+Button(root, text='Quit',             command=root.destroy).pack(pady=5)
 
-start_btn = Button(root, text='Start Automation', command=start_script)
-start_btn.pack(pady=10)
-
-stop_btn = Button(root, text='Stop Automation', command=stop_script)
-stop_btn.pack(pady=10)
-
-quit_btn = Button(root, text='Quit', command=root.destroy)
-quit_btn.pack(pady=10)
-
-
-
-result_label = Label(root, text='')
+result_label = Label(root, text='', wraplength=220)
 result_label.pack(pady=10)
-
 
 root.mainloop()
