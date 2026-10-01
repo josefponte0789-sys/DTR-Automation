@@ -12,6 +12,7 @@ EXCEL_FILE = 'joborderpersonnels.xlsx'
 PERSONNEL_TYPES = {
     'jo':    'JobOrderName',
     'nurse': 'NurseName',
+    'supply': 'Supply',
 }
 
 pyautogui.FAILSAFE = True
@@ -100,8 +101,10 @@ def process_one(name, date_picker):
     time.sleep(3.5)
 
     # Download
-    find_and_click('downloadpdf.PNG', confidence=0.8)
-    time.sleep(1.5)
+    pyautogui.hotkey('ctrl', 's')
+    time.sleep(0.5)
+    pyautogui.press('enter')
+    pyautogui.press('enter')
     pyautogui.press('enter')
     time.sleep(0.5)
     pyautogui.hotkey('ctrl', 'w')
@@ -121,7 +124,7 @@ def run_automation():
     global running
 
     personnel_type = pyautogui.prompt(
-        text='Type "jo" for Job Order Personnel, "nurse" for Nurse personnel.',
+        text='Available directories: "jo", "nurse", "supply"',
         title='What are we saving?',
         default=''
     )
